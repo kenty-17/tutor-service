@@ -1,0 +1,19 @@
+# редакторы
+.vscode/
+.idea/
+
+# DBeaver
+.dbeaver/
+*.dbeaver-data-sources.xml
+
+# системные файлы
+.DS_Store
+Thumbs.db
+
+# черновики и копии
+*.bak
+*.tmp
+*~
+
+# секреты и пароли к базе
+.env

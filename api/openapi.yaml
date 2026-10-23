@@ -1,0 +1,214 @@
+openapi: 3.0.3
+info:
+  title: Сервис учёта занятий репетитора
+  version: 1.0.0
+  description: >
+    Учебное описание API (приложение не реализовано). Даты и время - ISO 8601 с часовым поясом
+    (2026-10-21T16:30:00+03:00), суммы в рублях. Репетитор является единственным пользователем, имеющим доступ, авторизация не описана.
+
+paths:
+  /lessons:
+    get:
+      summary: Расписание на период
+      description: Занятия без итогового статуса с начальной датой from (включительно) до to (не включительно)
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          example: '2026-10-21T00:00:00+03:00'
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          example: '2026-10-28T00:00:00+03:00'
+      responses:
+        '200':
+          description: Список занятий по времени начала
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Lesson' }
+        '400': { $ref: '#/components/responses/Error' }
+    post:
+      summary: Создать занятие
+      description: Проверяет, что время нового занятия не пересекается с другими занятиями (кроме отмененных и перенесенных)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LessonCreate' }
+      responses:
+        '201':
+          description: Занятие создано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lesson' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /lessons/{lesson_id}:
+    patch:
+      summary: Поставить итоговый статус занятию
+      description: >
+        Ставит статус «Проведено» или «Отменено» и создаёт запись об оплате со статусом «Не оплачено»
+        (сумма = ставка ученика * длительность в часах).
+        Статус «Перенесено» ставится методом POST /reschedules
+      parameters:
+        - name: lesson_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 34
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [Проведено, Отменено]
+      responses:
+        '200':
+          description: Статус поставлен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lesson' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /reschedules:
+    post:
+      summary: Оформить перенос занятия
+      description: >
+        Решение о переносе репетитор принимает вне системы. В одной транзакции создаётся новое занятие, старое получает статус «Перенесено», перенос записывается в историю переносов.
+        Если время занято — 409
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lesson_id, new_start_at, requested_by]
+              properties:
+                lesson_id: { type: integer, description: Переносимое занятие, example: 7 }
+                new_start_at: { type: string, format: date-time, example: '2026-09-29T19:00:00+03:00' }
+                requested_by: { type: string, enum: [Ученик, Родитель, Репетитор], example: Родитель }
+      responses:
+        '201':
+          description: Перенос оформлен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reschedule_id: { type: integer, example: 1 }
+                  lesson_id: { type: integer, description: Старое занятие, example: 7 }
+                  new_lesson_id: { type: integer, description: Новое занятие, example: 8 }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /payments/{payment_id}:
+    patch:
+      summary: Отметить занятие оплаченным
+      description: Меняет статус записи об оплате на «Оплачено» и записывает дату оплаты
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema: { type: integer }
+          example: 21
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paid_at]
+              properties:
+                paid_at: { type: string, format: date, example: '2026-10-21' }
+      responses:
+        '200':
+          description: Оплата отмечена
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /students/{student_id}/debt:
+    get:
+      summary: Долг ученика
+      description: Сумма записей «Не оплачено» по проведённым занятиям, отменённые занятия в долг не входят (если долга нет, то сумма долга 0.00)
+      parameters:
+        - name: student_id
+          in: path
+          required: true
+          schema: { type: integer }
+          example: 5
+      responses:
+        '200':
+          description: Долг ученика
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  student_id: { type: integer, example: 5 }
+                  debt: { type: number, example: 2000.00 }
+        '404': { $ref: '#/components/responses/Error' }
+
+components:
+  responses:
+    Error:
+      description: Ошибка (400 - неверные данные, 404 - не найдено, 409 - конфликтная ситуация, например, время занято).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: TIME_CONFLICT
+            message: Время пересекается с другим занятием
+
+  schemas:
+    Lesson:
+      type: object
+      properties:
+        lesson_id: { type: integer, example: 34 }
+        student_id: { type: integer, example: 5 }
+        start_at: { type: string, format: date-time, example: '2026-10-21T18:00:00+03:00' }
+        duration_min: { type: integer, minimum: 60, maximum: 120, example: 60 }
+        status:
+          type: string
+          nullable: true
+          description: null означает, что занятие ещё не состоялось
+          enum: [Проведено, Перенесено, Отменено, null]
+    LessonCreate:
+      type: object
+      required: [student_id, start_at, duration_min]
+      properties:
+        student_id: { type: integer, example: 5 }
+        start_at: { type: string, format: date-time, example: '2026-10-24T18:00:00+03:00' }
+        duration_min: { type: integer, minimum: 60, maximum: 120, example: 60 }
+    Payment:
+      type: object
+      properties:
+        payment_id: { type: integer, example: 21 }
+        lesson_id: { type: integer, example: 22 }
+        amount: { type: number, example: 1800.00 }
+        status: { type: string, enum: [Не оплачено, Оплачено] }
+        paid_at: { type: string, format: date, nullable: true }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: TIME_CONFLICT }
+        message: { type: string }
